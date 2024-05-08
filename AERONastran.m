@@ -1,5 +1,4 @@
 %% AERONastran
-% Grupo 14
 
 clear all;
 close all;
@@ -9,7 +8,9 @@ close all;
 % input and output file
 entry_file = 'Alas.bdf';
 output_file = 'archivo_ordenado.bdf';
+output_file_flutter = 'archivo_flutter.bdf';
 matrices_file  = 'matrix.bdf';
+f06_file = 'archivo_ordenado.f06';
 
 % format line for the .bdf
 format_line = '\n$...1...|...2...|...3...|...4...|...5...|...6...|...7...|...8...|...9...|..10... \n';
@@ -22,69 +23,93 @@ heading_line = '';
 % set wing span and chord
 span = 2.5;
 chord = 0.5;
-angle = 0;
+angle = 7;
 
 wingspecs = [span, chord, angle];
 
 % FEM material
-material = struct('E', 10000, 'dens', 2850, 'poisson', 0.3);
+material = struct('E', 7.E10, 'dens', 2750, 'poisson', 0.3);
 
 
 %% === Set analysis parameters ===
-analysis = 2; % select the analyisis type (1 : flutter, 2 : divergence)
+analysis = 1; % select the analyisis type (1 : flutter, 2 : divergence)
 aeroparam = struct('M', 0.0, 'Q', 1500, 'AOA', 0.0174533);
 
-nnodes = 45;
-total_nodes = nnodes/5;
+meshdiv = [7, 15];
 
 % set panel span and chord division
-% span_division = [0.0000, 0.0625, 0.1250, 0.1875, 0.2500, 0.3167, 0.3834, ...
-%                  0.4483, 0.5117, 0.56, 0.5725, 0.6317, 0.6892, 0.7450, 0.7992, ...
-%                  0.8525, 0.9042, 0.9534, 1.0000];
-span_division = linspace(0,1,11);
-chord_division = [0.0000, 0.1091, 0.2182, 0.3886, 0.5614, 0.7273, 0.8705, 1.0000];
+panspandiv = linspace(0,1,11);
+panchorddiv = [0.0000, 0.1091, 0.2182, 0.3886, 0.5614, 0.7273, 0.8705, 1.0000];
 
 
-%% === Analyisis case ===
+dens = linspace(0.3,1.225,20);
+M = 0.2*ones(1,length(dens));
+vel = round(linspace(50,150,20),2);
+flutterparam = [dens;M;vel];
+%% DEBUG
+main(output_file, flutterparam, wingspecs, material, analysis, aeroparam, meshdiv, panspandiv, panchorddiv, format_line)
 
-switch analysis
-    case 1
-        disp('Flutter')
-    case 2
-        disp('Divergence')
-        create_bdf_file(output_file);
 
-        write_solaeroelasticity_section(output_file);
+%% === Main ===
+function main(output_file, flutterparam, wingspecs, material, analysis, aeroparam, meshdiv, panspandiv, panchorddiv,format_line)
+    dens = flutterparam(1,:); M = flutterparam(2,:); vel = flutterparam(3,:);
+    if wingspecs(3) == 0
+        angleflag = 0;
+    else
+        angleflag = 1;
+    end
+    
+    [X,Y,Z] = FEM(wingspecs, meshdiv(1), meshdiv(2));
+    nodes = get_nodes(X, Y, Z);
+    meshplot(X,Y,Z, nodes, true);
+    shell_elements = gen_shell(nodes);
+    
+    [XP, YP, ZP] = dlmpanels(wingspecs, panspandiv, panchorddiv);
+    panels = get_panels(XP,YP,ZP);
+    [spandiv, ~] = size(X);
 
-        [X,Y,Z] = FEM(wingspecs, total_nodes);
-        nodes = get_nodes(X, Y, Z, nnodes);
-        meshplot(X,Y,Z, nodes, true);
-        nodedump(nodes, format_line, output_file);
+    switch analysis
+        case 1
+            disp('Flutter')
+            create_bdf_file(output_file);
+            write_flutter_analysis_file(output_file);
 
-        shell_elements = gen_shell(nodes);
-        shelldump(output_file, shell_elements, format_line);
-        set_material(output_file, material, format_line);
+            nodedump(nodes, format_line, output_file);
+            shelldump(output_file, shell_elements, format_line);
+            set_material(output_file, material, format_line);
+    
+            panelplot(XP,YP,ZP, panels);
+            method(output_file, format_line, angleflag, nodes, spandiv, panels);
+            paneldivision(output_file, format_line, panchorddiv, panspandiv);
+            wingstructcoupling(output_file, nodes, format_line,panels, angleflag);
+            set_eigen(output_file, format_line, 0, 15,10);
+            set_flightcond(output_file, format_line, 0.2, 1500);
+            set_flutter(output_file, format_line);
+            set_mkaero(output_file, format_line);
+            set_flfacts(output_file, dens, M, vel, format_line);
+            end_file(output_file);
+       
+        case 2
+            disp('Divergence')
+            create_bdf_file(output_file);
+            write_solaeroelasticity_section(output_file);
+    
+            nodedump(nodes, format_line, output_file);
 
-        matrices(matrices_file);
-        shelldump(matrices_file, shell_elements, format_line);
-        set_material(matrices_file, material, format_line);
-        nodedump(nodes, format_line, matrices_file);
-        end_file(matrices_file);
+            shelldump(output_file, shell_elements, format_line);
+            set_material(output_file, material, format_line);
+            
+            panelplot(XP,YP,ZP, panels);
+            method(output_file, format_line, angleflag, nodes, spandiv, panels);
+            paneldivision(output_file, format_line, panchorddiv, panspandiv);
+            wingstructcoupling(output_file, nodes, format_line,panels, angleflag);
+            set_aeros(output_file, wingspecs, format_line);
+            set_trim(output_file, aeroparam, format_line);
+            end_file(output_file);
         
-        [XP, YP, ZP] = dlmpanels(wingspecs, span_division, chord_division);
-        panels = get_panels(XP,YP,ZP);
-
-        panelplot(XP,YP,ZP, panels);
-        method(output_file, format_line);
-        paneldivision(output_file, format_line, chord_division, span_division);
-        wingstructcoupling(output_file, nodes, format_line,panels);
-        set_aeros(output_file, chord, span, format_line);
-        set_trim(output_file, aeroparam, format_line);
-        end_file(output_file);
+    end
 
 
-
- 
 end
 
 %% === Geometry definition ===
@@ -115,7 +140,6 @@ fprintf(fileopen_entry, format_line);
 fprintf(fileopen_entry, 'AEFACT  151    ');
 write_array(fileopen_entry, chord_division);
 
-
 % Close file
 fclose(fileopen_entry);
 
@@ -123,6 +147,14 @@ end
 
 %% === Doublet lattice method ===
 function [X,Y,Z] = dlmpanels(wingspecs, span_division, chord_division)
+    % Double lattice panel generation
+    % Input
+    %   - wingspecs : span, chord, angle [1x3]
+    %   - span_division : span number of divisions
+    %   - chord_division : chord number of divisions
+    % Output
+    %   - [X,Y,Z] : coordinates of the panel nodes
+    
     span = wingspecs(1);
     chord = wingspecs(2);
     angle = wingspecs(3);
@@ -185,7 +217,7 @@ function panels = get_panels(X, Y, Z)
 
     [rows, cols] = size(X);
     panels = struct('id', [], 'x', [], 'y', [], 'z', []);
-    panel_id = 101001; % Starting ID for panels
+    panel_id = 40001; % Starting ID for panels
     
     for i = 1:rows-1
         for j = 1:cols-1
@@ -199,54 +231,114 @@ function panels = get_panels(X, Y, Z)
             panel_id = panel_id + 1;
         end
     end
+    panels(1) = [];
 
 end
 
+function method(filename, format_line,angleflag, nodes, spandiv, panels)
+    % Sets the CAERO method for the .bdf
+    % Input
+    %   - filename : bdf file
+    %   - format_line : division line
+    %   - angleflag : checks if wing has some angle
+    %   - nodes : node array
+    %   - spandiv : span division
 
 
-function method(filename, format_line)
     % Open the file for appending
     fid = fopen(filename, 'a');
     if fid == -1
         error('Could not open the file');
     end
+    index = round(spandiv/2);
 
-    str = 'CAERO1  101001  100000                          101     151     1       +';
-    str_nodes = '0.25    0.0     0.0     0.5     0.25     2.5     0.0     0.5';
-    % Append the string to the file
-    fprintf(fid, '$');
-    fprintf(fid, format_line);
-    fprintf(fid, '%s\n', str);
-    fprintf(fid, '+       ');
-    fprintf(fid, '%s', str_nodes);
-    fprintf(fid, format_line);
-    fprintf(fid, 'PAERO1  100000');
-    % Close the file
-    fclose(fid);
+    if angleflag == 0
+        str = 'CAERO1  40001   10000                           101     151     1       +';
+        str_nodes = '-0.25   0.0     0.0     0.5     -0.25   2.5     0.0     0.5';
+        % Append the string to the file
+        fprintf(fid, '$');
+        fprintf(fid, format_line);
+        fprintf(fid, '%s\n', str);
+        fprintf(fid, '+       ');
+        fprintf(fid, '%s', str_nodes);
+        fprintf(fid, format_line);
+        fprintf(fid, 'PAERO1  10000');
+        % Close the file
+        fclose(fid);
+    else
+        str_w1 = 'CAERO1  40001   10000                           101     151     1       +';
+       
+        midxcoord = 2*nodes(1).x - nodes(index).x;
+        midycoord = nodes(index).y;
+        chord = 2*nodes(1).x;
+
+        fprintf(fid, '$');
+        fprintf(fid, format_line);
+        fprintf(fid, '%s\n', str_w1);
+        fprintf(fid, '+       ');
+        fprintf(fid, '-%.2f   0.0     0.0     %.1f     -%.4f %.2f    0.0     %.1f',nodes(1).x,chord,midxcoord,midycoord,chord);
+        fprintf(fid, format_line);
+        fprintf(fid, 'CAERO1  %i   10000                           101     151     1       +\n',panels(end).id+1);
+        fprintf(fid, '+       ');
+        fprintf(fid, '-%.4f %.2f    0.0     %.1f     %.2f   %.4f  0.0     %.1f',midxcoord,midycoord, chord, nodes(end).x, nodes(end).y, chord);
+        fprintf(fid, format_line);
+        fprintf(fid, 'PAERO1  10000');
+
+
+    end
+
+
 end
 
-function wingstructcoupling(file, nodes, format_line, panels)
+function wingstructcoupling(file, nodes, format_line, panels, angleflag)
     % Open the file for appending
     fid = fopen(file, 'a');
     if fid == -1
         error('Could not open the file');
     end
-    
-    % Append the format line
+    pindex = length(panels)/2;
+    lastid = num2str(nodes(end).id);
+    nindex = round(str2double(lastid(end-1:end))/2);
+    wing1 = [];
+    wing2 = [];
+
+    for j = 1:numel(nodes)
+        if nodes(j).wing == 1
+            wing1(end+1) = nodes(j).id;
+        elseif nodes(j).wing == 2
+            wing2(end+1) = nodes(j).id;
+        end
+
+    end
+
+    fprintf(fid, '$          EID    CAERO    BOX1    BOX2    SETG');
     fprintf(fid, format_line);
-    fprintf(fid, 'SPLINE1 101001  101001  101001  %i  101001\n',panels(end).id);
-    
-    fprintf(fid, 'SET1    101001');
-    write_set(fid, [nodes(:).id])
+    if angleflag == 0
+        % Append the format line
+        fprintf(fid, 'SPLINE1 50001   40001   40001   %i   901\n',panels(end).id);
+        fprintf(fid, 'SET1    901   ');
+        write_set(fid, [nodes(:).id])
+
+    else
+        fprintf(fid, 'SPLINE1 50001   40001   40001   %i   901\n',panels(end).id);
+        fprintf(fid, 'SPLINE1 50002   %i   %i   %i   902',panels(end).id+1,panels(end).id+1, mod(panels(end).id,100)*2+40000);
+        fprintf(fid, '\nSET1    901   ');
+        write_set(fid, wing1)
+        fprintf(fid, '\nSET1    902   ');
+        write_set(fid, wing2)
+    end
+   
 
     fclose(fid);
 end
 
-
-function set_aeros(file, chord, span, format_line)
+%% === Solving divergence ===
+function set_aeros(file, wingspecs, format_line)
 % Used in sol 144 to give the reference coordinates system and values. The
 % reference values are taken from the chord and span, and the reference
 % coordinate system is the default.
+
+chord = wingspecs(1); span = wingspecs(2);
 
 fid = fopen(file, 'a');
 if fid == -1
@@ -258,7 +350,7 @@ aerosinfo = '\n$AEROS  ACSID   RCSID   REFC    REFB    REFS    SYMXZ   SYMXY';
 
 fprintf(fid,aerosinfo);
 fprintf(fid,format_line);
-fprintf(fid, 'AEROS                   %.1f     %.1f     %.2f     \n', chord, span, span*chord);
+fprintf(fid, 'AEROS                   %.1f     %.1f     %.2f    +1\n', chord, span, span*chord);
 
 % Close the file
 fclose(fid);
@@ -281,6 +373,83 @@ fprintf(fid, '\nAESTAT        61  ANGLEA');
 
 
 end
+%% === Solving flutter ===
+
+function foo()
+
+end
+
+function set_mkaero(outputfile, format_line)
+    fid = fopen(outputfile, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid, format_line);
+    fprintf(fid, 'MKAERO1 0.2000\n');
+    fprintf(fid, '+       1.0000  0.9000  0.8000  0.7000  0.6000  0.5000  0.4000  0.3000\n');
+    fprintf(fid, 'MKAERO1 0.2000\n');
+    fprintf(fid, '+       0.2000  0.1000  0.0100');
+    fclose(fid);
+end
+
+function set_eigen(outputfile, format_line, V1, V2, nroots)
+    fid = fopen(outputfile, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid, '$\n$ Modal Analysis\n$ ');
+    fprintf(fid, format_line);
+    fprintf(fid, '$          SID     V1      V2      ND    MSGLVL  MAXSET  SHFSCL   NORM\n');
+    fprintf(fid, 'EIGRL   200     %.2f    %.2f   %i                              MAX', V1,V2, nroots);
+    fclose(fid);
+end  
+
+function set_flightcond(outputfile, format_line, Mach, Q)
+    fid = fopen(outputfile, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid, format_line);
+    fprintf(fid, 'PARAM   MACH    %.4f\n', Mach);
+    fprintf(fid, 'PARAM   Q       %.3f', Q);
+    fprintf(fid, format_line);
+    fprintf(fid, '$               VELOCITY  REFC  RHOREF  SIMXZ\n');
+    fprintf(fid, 'AERO            1.00      0.5   1.225   +1\n');
+    fclose(fid);
+end
+
+function set_flutter(outputfile, format_line)
+    fid = fopen(outputfile, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid, '$\n$ Flutter Analysis\n$\n');
+    fprintf(fid, 'PARAM   VREF    0.514444');
+    fprintf(fid, format_line);
+    fprintf(fid, '$               METHOD  DENS    MACH    VEL     IMETH\n');
+    fprintf(fid, 'FLUTTER 300     PKNL    1       2       3       L');
+    fclose(fid);
+    
+
+end
+
+function set_flfacts(outputfile, dens, Mach, Vel, format_line)
+    %
+    fid = fopen(outputfile, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid,'\n$    SID     F1      F2      F3      F4      F5      F6      F7\n');
+    fprintf(fid, format_line);
+    fprintf(fid,'FLFACT  1      ');
+    write_array(fid, dens);
+    fprintf(fid,'FLFACT  2      ');
+    write_array(fid, Mach);
+    fprintf(fid,'FLFACT  3      ');
+    write_flutter_array(fid, Vel);
+    fclose(fid);
+
+end
 
 %% === Set FEM properties ===
 function set_material(file, material, format_line)
@@ -290,25 +459,23 @@ function set_material(file, material, format_line)
     end
     
     fprintf(fid, format_line);
-    fprintf(fid, 'MAT1    1       %.1e         %.1f     %.1f\n', material.E, material.poisson, material.dens);
-    
+    fprintf(fid, '$          MID      E       G      NU      RHO      A     TREF     GE\n');
+    fprintf(fid, 'MAT1    1       %.1e         %.1f     %.1f                  0.05\n', material.E, material.poisson, material.dens);
     fclose(fid);
 
 end
 
 %% === FEM Grid generation ===
-function [X,Y,Z] = FEM(wingspecs, total_nodes)
-    span = wingspecs(1);
-    chord = wingspecs(2);
-    angle = wingspecs(3);
+function [X,Y,Z] = FEM(wingspecs, chordnodes,spannodes)
+    span = wingspecs(1); chord = wingspecs(2); angle = wingspecs(3);
+
+    % Calculate the number of nodes for each section
+
 
     
-    % Calculate the number of nodes for each section
-    nnodes_section = round(total_nodes / 2);
-    
     % Generate nodes for the first section
-    span_nodes1 = linspace(0, span/2, nnodes_section);
-    chord_nodes = linspace(chord/2, -chord/2, nnodes_section);
+    span_nodes1 = linspace(0, span/2, round(spannodes/2));
+    chord_nodes = linspace(chord/2, -chord/2, chordnodes);
     
     % Calculate the slope for the first section
     theta1 = deg2rad(angle);
@@ -317,19 +484,21 @@ function [X,Y,Z] = FEM(wingspecs, total_nodes)
     % Generate nodes for the second section
     % Start at the end of the first section
     span_offset = span_nodes1(end); % Offset for the start of the second section
-    span_nodes2 = linspace(0, span/2, nnodes_section) + span_offset; % Include one more node for smooth connection
-   
+    span_nodes2 = linspace(0, span/2, round(spannodes/2)) + span_offset; % Include one more node for smooth connection
+    span_nodes2(1) = [];
    
     % Initialize arrays to store coordinates of all nodes
-    X1 = zeros(nnodes_section, nnodes_section);
-    Y1 = zeros(nnodes_section, nnodes_section);
-    Z1 = zeros(nnodes_section, nnodes_section);
+    X1 = zeros(round(spannodes/2), chordnodes);
+    Y1 = zeros(round(spannodes/2), chordnodes);
+    Z1 = zeros(round(spannodes/2), chordnodes);
 
-    X2 = X1; Y2 = Y1; Z2 = Z1;
+    X2 = zeros(round(spannodes/2)-1, chordnodes);
+    Y2 = zeros(round(spannodes/2)-1, chordnodes);
+    Z2 = zeros(round(spannodes/2)-1, chordnodes);
     
     % Generate coordinates for the first section
-    for i = 1:nnodes_section
-        for j = 1:nnodes_section
+    for i = 1:round(spannodes/2)
+        for j = 1:chordnodes
             X1(i, j) = chord_nodes(j) + m1 * span_nodes1(i);
             Y1(i, j) = span_nodes1(i);
             Z1(i, j) = 0;
@@ -337,8 +506,8 @@ function [X,Y,Z] = FEM(wingspecs, total_nodes)
     end
     span_nodes2 = flip(span_nodes2);
     % Generate coordinates for the second section
-    for i = 1:(nnodes_section) % Include one more node for smooth connection
-        for j = 1:nnodes_section
+    for i = 1:round(spannodes/2)-1
+        for j = 1:chordnodes
             X2(i, j) = chord_nodes(j) + m1 * span_nodes1(i);
             Y2(i, j) = span_nodes2(i);
             Z2(i, j) = 0;
@@ -348,6 +517,7 @@ function [X,Y,Z] = FEM(wingspecs, total_nodes)
     X2 = flip(X2,1);
     Y2 = flip(Y2,1);
 
+    % X,Y,Z => [spandiv, chordiv]
     X = vertcat(X1, X2); 
     Y = vertcat(Y1, Y2);
     Z = vertcat(Z1, Z2);
@@ -377,7 +547,7 @@ for i = 1:length(nodes)
 end
 
 nchord = count;
-nspan = length(nodes)/5;
+nspan = length(nodes)/nchord;
 
 for j = 1:nchord-1
     for i = 1:nspan-1
@@ -396,15 +566,12 @@ shell_elements(1) = [];
 
 end
 
-function nodes = get_nodes(X, Y, Z, nnodes)
+function nodes = get_nodes(X, Y, Z)
     % Initialize array to store node coordinates
-    node_coordinates = struct('id', [], 'x', [], 'y', [], 'z', [], 'bc', []);
+    node_coordinates = struct('id', [], 'x', [], 'y', [], 'z', [], 'bc', [],'wing',[]);
     
     % Get the number of nodes and dimensions
-    [nnodes_row, nnodes_col] = size(X); nnodes_row = nnodes_row-1;
-    X(round(nnodes/10),:) = [];
-    Y(round(nnodes/10),:) = [];
-    Z(round(nnodes/10),:) = [];
+    [nnodes_row, nnodes_col] = size(X);
     
     % Loop through the coordinates and assign boundary conditions
     for j = 1:nnodes_col
@@ -413,16 +580,20 @@ function nodes = get_nodes(X, Y, Z, nnodes)
             x = X(i, j);
             y = Y(i, j);
             z = Z(i, j);
-            id = start_id + i;
+            id = start_id + i; % Assign a unique ID for each node
             if mod(id, 1000) == 1
             % Update the 'bc' attribute for these nodes
-            bc = 123456; % Assuming 'bc' is set to 1 for these nodes
+                bc = 123456; % Assuming 'bc' is set to 1 for these nodes
             else
                 bc = [];
             end
-            % Assign a unique ID for each node
+            if mod(id, 100) <= round(nnodes_row/2)
+               wing = 1;
+            else
+               wing = 2;
+            end
             
-            node_coordinates(end+1) = struct('id', id, 'x', x, 'y', y, 'z', z, 'bc', bc);
+            node_coordinates(end+1) = struct('id', id, 'x', x, 'y', y, 'z', z, 'bc', bc,'wing',wing);
         end
     end
     
@@ -430,18 +601,6 @@ function nodes = get_nodes(X, Y, Z, nnodes)
     node_coordinates(1) = [];
     
     nodes = node_coordinates;
-
-end
-
-function set_boundarycond(nodes)
-% Sets the boundary conditions in the designed nodes.
-    for i = 1:numel(nodes)
-        % Check if the node id follows the pattern (e.g., 1001, 2001, 3001, ...)
-        if mod(nodes(i).id, 1000) == 1
-            % Update the 'bc' attribute for these nodes
-            nodes(i).bc = 123456; % Assuming 'bc' is set to 1 for these nodes
-        end
-    end
 
 end
 
@@ -519,7 +678,10 @@ function shelldump(output_file, shell_elements, format_line)
     end
 
     fprintf(fid,format_line);
-    fprintf(fid,'PSHELL  1       1       .008    1               1\n\n');
+    fprintf(fid,'$          PID     MID1    T      MID2             MID3    TS/T    NSM\n');
+    fprintf(fid,'PSHELL  1       1       .008    1               1\n');
+    fprintf(fid,format_line);
+
     % Write shell elements to the file
     for i = 1:length(shell_elements)
         fprintf(fid, 'CQUAD4  %d   1       %d    %d    %d    %d\n', ...
@@ -532,21 +694,102 @@ function shelldump(output_file, shell_elements, format_line)
 end
 
 %% === Plot functions ===
+
+function plot_displaced_nodes(f06_file, original_nodes)
+    % Read the F06 file and extract displacement data
+    fid = fopen(f06_file, 'r');
+    if fid == -1
+        error('Error: Could not open F06 file');
+    end
+    
+    displacement_data = [];
+    while ~feof(fid)
+        line = fgetl(fid);
+        if startsWith(line, '          ') && contains(line, ' G ')
+            % Extract displacement data for each node
+            displacement_values = sscanf(line, '%d %*s %f %f %f %f %f %f');
+            displacement_data = [displacement_data; displacement_values'];
+        end
+    end
+    fclose(fid);
+    
+    
+    % Check if displacement data matches the number of nodes
+    if size(displacement_data, 1) ~= numel(original_nodes)
+        error('Error: Number of nodes in F06 file does not match original node data');
+    end
+    displcmnt = 1*displacement_data(:,2:4);
+    rot = displacement_data(:,5:7);
+    
+    % Extract original coordinates of nodes
+    original_x = [original_nodes.x];
+    original_y = [original_nodes.y];
+    original_z = [original_nodes.z];
+    
+    % Extract displacement vectors
+    displacement_x = displcmnt(:, 1);
+    displacement_y = displcmnt(:, 2);
+    displacement_z = displcmnt(:, 3);
+
+    % Extract rotation data
+    rotation_x = rot(:, 1);
+    rotation_y = rot(:, 2);
+    rotation_z = rot(:, 3);
+
+    % Calculate new coordinates after displacement
+    displaced_x = original_x + displacement_x';
+    displaced_y = original_y + displacement_y';
+    displaced_z = original_z + displacement_z';
+    
+    % Apply rotations to displaced points
+    rotated_displaced_points = [];
+    for i = 1:size(displacement_data, 1)
+        % Define rotation matrices for each axis
+        Rx = [1 0 0; 0 cosd(rotation_x(i)) -sind(rotation_x(i)); 0 sind(rotation_x(i)) cosd(rotation_x(i))];
+        Ry = [cosd(rotation_y(i)) 0 sind(rotation_y(i)); 0 1 0; -sind(rotation_y(i)) 0 cosd(rotation_y(i))];
+        Rz = [cosd(rotation_z(i)) -sind(rotation_z(i)) 0; sind(rotation_z(i)) cosd(rotation_z(i)) 0; 0 0 1];
+        
+        % Apply rotations
+        rotated_point = Rz * Ry * Rx * [displaced_x(i); displaced_y(i); displaced_z(i)];
+        rotated_displaced_points(i, :) = rotated_point';
+    end
+
+       
+    % Plot mesh using displaced nodes
+    figure;
+    plot3(rotated_displaced_points(:, 1), rotated_displaced_points(:, 2), rotated_displaced_points(:, 3), '-o', 'LineWidth', 1.5);    
+
+    ylim([-0.5,6]);
+    xlim([-1,1]);
+    zlim([-0.1,3]);
+    xlabel('X');
+    ylabel('Y');
+    zlabel('Z');
+    title('Displaced Nodes and Deformed Wing Mesh');
+    
+    % Show grid
+    grid on;
+    
+    % Show plot
+
+end
+
 function meshplot(X, Y, Z, nodes, nodeplotflag)
     % Plotting the mesh
     figure;
-    mesh(X, Y, Z);
+    mesh(X, Y, Z, 'EdgeColor', 'blue', 'FaceAlpha',0);
     xlabel('Chord');
     ylabel('Span');
     zlabel('Z');
-    title('Full Wing Mesh with Double Angle');
+    title('Wing structural mesh');
     grid on;
 
     % Plotting the node IDs if nodeplotflag is true
     if nodeplotflag
         hold on;
         for i = 1:numel(nodes)
-            text(nodes(i).x, nodes(i).y, nodes(i).z, num2str(nodes(i).id), 'Color', 'red');
+            plot3(nodes(i).x, nodes(i).y, nodes(i).z, 'Marker', 'o', 'MarkerFaceColor', 'red');
+            text(nodes(i).x, nodes(i).y, nodes(i).z-0.05, num2str(nodes(i).id), 'Color', 'red', 'FontSize',8);
         end
         hold off;
     end
@@ -566,100 +809,14 @@ function panelplot(X, Y, Z, panels)
         z_center = mean(panel.z);
         text(x_center, y_center, z_center+0.02, num2str(panel.id), 'HorizontalAlignment', 'center', 'VerticalAlignment', 'middle', 'Color', 'red');
     end
-    ylim([-0.5,3]);
-    xlim([-0.5,0.5]);
+    ylim([-0.5,6]);
+    xlim([-1,1]);
     xlabel('Chord');
     ylabel('Span');
     zlabel('Z');
     title('Wing panel distribution');
     grid on;
     hold off;
-end
-
-function mesh_plot(filename)
-    % Open the file for reading
-    fid = fopen(filename, 'r');
-    if fid == -1
-        error('Could not open the file');
-    end
-    
-    % Initialize arrays to store node numbers and coordinates
-    node_numbers = [];
-    coordinates = [];
-    
-    % Read each line of the file
-    tline = fgetl(fid);
-    while ischar(tline)
-        % Check if the line starts with 'GRID'
-        if startsWith(tline, 'GRID')
-            % Split the line into parts
-            parts = strsplit(tline);
-            % Extract node number and coordinates
-            node_number = str2double(parts{2});
-            x_coord = str2double(parts{3});
-            y_coord = str2double(parts{4});
-            z_coord = str2double(parts{5});
-            % Store node number and coordinates
-            node_numbers(end+1) = node_number;
-            coordinates(end+1, :) = [x_coord, y_coord, z_coord];
-        end
-        % Read the next line
-        tline = fgetl(fid);
-    end
-    
-    % Close the file
-    fclose(fid);
-    
-    % Plot the nodes in 3D
-    figure;
-    scatter3(coordinates(:, 1), coordinates(:, 2), coordinates(:, 3), 'filled', 'SizeData', 50);
-    xlim([0,1])
-    ylim([0,3])
-    xlabel('X');
-    ylabel('Y');
-    zlabel('Z');
-    title('Nodes');
-    grid on;
-end
-
-function plot_node_ids(nodes)
-    % Extract x, y, z coordinates from the nodes struct
-    x_coords = [nodes.x];
-    y_coords = [nodes.y];
-    z_coords = [nodes.z];
-
-    % Plot node IDs
-    scatter3(x_coords, y_coords, z_coords, 'filled');
-    hold on;
-    for i = 1:numel(nodes)
-        text(x_coords(i), y_coords(i), z_coords(i), num2str(nodes(i).id), 'Color', 'red');
-    end
-    hold off;
-    xlabel('Chord');
-    ylabel('Span');
-    zlabel('Z');
-    title('Node IDs Plot');
-    grid on;
-end
-
-function plot_edges(edge_nodes)
-    % Open a new figure
-    figure;
-    
-    % Plot the edges formed by edge nodes
-    plot3(edge_nodes(:, 1), edge_nodes(:, 2), edge_nodes(:, 3), 'b-', 'LineWidth', 2);
-    
-    % Set labels and title
-    xlabel('X');
-    ylabel('Y');
-    zlabel('Z');
-    title('Edges of the Wing');
-    
-    % Adjust the aspect ratio of the plot
-    axis equal;
-    
-    % Show grid
-    grid on;
 end
 
 %% === Helpers ===
@@ -672,6 +829,48 @@ function write_solaeroelasticity_section(filename)
     fprintf(fid, content);
     fclose(fid);
 end
+
+function write_flutter_analysis_file(filename)
+    fid = fopen(filename, 'a');
+    if fid == -1
+        error('Error: Unable to open file for writing');
+    end
+    
+    % Write the header
+    fprintf(fid, '$ ======================================================================\n');
+    fprintf(fid, '$                       SOL 145 - flutter Analysis \n');
+    fprintf(fid, '$ ======================================================================\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, '$ ------------------   File Management Section   -----------------------\n');
+    fprintf(fid, '$ ASSIGN OUTPUT4 = ''btb.f50'',UNIT = 50,FORM=FORMATTED        \n');
+    fprintf(fid, '$\n');
+    fprintf(fid, '$ ------------------   Executive Control Deck    -----------------------\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, 'ID                  MSC.NASTRAN NORMAL MODES ANALYSIS\n');
+    fprintf(fid, 'SOL                 145\n');
+    fprintf(fid, 'TIME                5000\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, '$ ------------------   Executive Control Deck    -----------------------\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, 'CEND\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, '$ ------------------   Case Control Deck   -----------------------------\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, 'TITLE               = BTB AEROELASTIC MODEL\n');
+    fprintf(fid, 'SUBTITLE            = (SOL103)\n');
+    fprintf(fid, '$\n');
+    fprintf(fid, 'ECHO                = NONE\n');
+    fprintf(fid, 'SEALL               = ALL\n');
+    fprintf(fid, '$ SPC                 = 100\n');
+    fprintf(fid, 'METHOD              = 200\n');
+    fprintf(fid, 'FMETHOD             = 300\n');
+    fprintf(fid, 'RESVEC              = NO\n');
+    fprintf(fid, 'DISPLACEMENT        = ALL\n');
+    
+    fclose(fid);
+end
+
+
 
 function content = generate_solaeroelasticity_section()
     content = '';
@@ -742,6 +941,27 @@ function end_file(output_file)
 
     fprintf(fid, '\n$\nENDDATA');
     fclose(fid);
+end
+
+function write_flutter_array(fid, array)
+    % Calculate the maximum number of digits in the array
+    max_digits = max(floor(log10(abs(array))) + 1);
+    
+    % Write the first line with appropriate spacing
+    for i = 1:min(7, numel(array))
+        fprintf(fid, '%*.*f ', max_digits + 4, 2, array(i));
+    end
+    fprintf(fid, ' +\n+      ');
+    
+    % Print lines with an 8-slot limit and appropriate spacing
+    for i = 8:numel(array)
+        if mod(i, 8) == 0 && i ~= 8
+            fprintf(fid, ' +\n+      ');
+        end
+        fprintf(fid, '%*.*f ', max_digits + 4, 2, array(i));
+    end
+    
+    fprintf(fid, '\n');
 end
 
 function write_array(fid, array)
