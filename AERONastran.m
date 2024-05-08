@@ -1,4 +1,5 @@
 %% AERONastran
+% Helper code to perform aeroelasticity simulations in NASTRAN.
 
 clear all;
 close all;
@@ -6,9 +7,7 @@ close all;
 %% === Files and format ===
 
 % input and output file
-entry_file = 'Alas.bdf';
 output_file = 'archivo_ordenado.bdf';
-output_file_flutter = 'archivo_flutter.bdf';
 matrices_file  = 'matrix.bdf';
 f06_file = 'archivo_ordenado.f06';
 
@@ -23,7 +22,7 @@ heading_line = '';
 % set wing span and chord
 span = 2.5;
 chord = 0.5;
-angle = 7;
+angle = -7;
 
 wingspecs = [span, chord, angle];
 
@@ -41,10 +40,10 @@ meshdiv = [7, 15];
 panspandiv = linspace(0,1,11);
 panchorddiv = [0.0000, 0.1091, 0.2182, 0.3886, 0.5614, 0.7273, 0.8705, 1.0000];
 
-
 dens = linspace(0.3,1.225,20);
 M = 0.2*ones(1,length(dens));
 vel = round(linspace(50,150,20),2);
+
 flutterparam = [dens;M;vel];
 %% DEBUG
 main(output_file, flutterparam, wingspecs, material, analysis, aeroparam, meshdiv, panspandiv, panchorddiv, format_line)
@@ -199,17 +198,25 @@ function [X,Y,Z] = dlmpanels(wingspecs, span_division, chord_division)
             Z2(i, j) = 0;
         end
     end
-
-    X2 = flip(X2, 1);
+    % flip the matrices to fit the wing
+    X2 = flip(X2, 1); 
     Y2 = flip(Y2, 1);
 
-
+    % concatenate the matrices and create the full mesh
     X = vertcat(X1, X2);
     Y = vertcat(Y1, Y2);
     Z = vertcat(Z1, Z2);
 end
 
 function panels = get_panels(X, Y, Z)
+    % Generates the DLM panels from the point mesh that gives the location
+    % of each node. The panel generation is only for plot purpposes, as in
+    % the .bdf only the division is needed.
+    % Input:
+    %   - [X,Y,Z] : mesh coordinates
+    % Output:
+    %   - panels : panel struct
+
     elim_row = size(X)/2;
     X(elim_row(1),:) = [];
     Y(elim_row(1),:) = [];
@@ -358,28 +365,35 @@ fclose(fid);
 end
 
 function set_trim(file, aeroparam, format_line)
-format_str = '$TRIM   ID      MACH    Q       LABEL1  UX1     LABEL2  UX2     AEQR    +\n';
-format2_str = '$+      LABEL3  UX3     ...';
-
-fid = fopen(file, 'a');
-if fid == -1
-    error('Could not open the file');
-end
-fprintf(fid,format_str);
-fprintf(fid, format2_str);
-fprintf(fid, format_line);
-fprintf(fid, 'TRIM    6       %.1f     %.1e  ANGLEA %.6f                %.1f',aeroparam.M, aeroparam.Q, aeroparam.AOA,1);
-fprintf(fid, '\nAESTAT        61  ANGLEA');
+    % Sets TRIM entry for static analysis.
+    % Input:
+    %   - file : .bdf file
+    %   - aeroparam : trim conditions
+    %   - format_line
+    
+    format_str = '$TRIM   ID      MACH    Q       LABEL1  UX1     LABEL2  UX2     AEQR    +\n';
+    format2_str = '$+      LABEL3  UX3     ...';
+    
+    fid = fopen(file, 'a');
+    if fid == -1
+        error('Could not open the file');
+    end
+    fprintf(fid,format_str);
+    fprintf(fid, format2_str);
+    fprintf(fid, format_line);
+    fprintf(fid, 'TRIM    6       %.1f     %.1e  ANGLEA %.6f                %.1f',aeroparam.M, aeroparam.Q, aeroparam.AOA,1);
+    fprintf(fid, '\nAESTAT        61  ANGLEA');
 
 
 end
 %% === Solving flutter ===
 
-function foo()
-
-end
-
 function set_mkaero(outputfile, format_line)
+    % Sets MKAERO1 entry for flutter analysis.
+    % Input:
+    %   - outputfile : .bdf file
+    %   - format_line
+
     fid = fopen(outputfile, 'a');
     if fid == -1
         error('Could not open the file');
@@ -393,6 +407,14 @@ function set_mkaero(outputfile, format_line)
 end
 
 function set_eigen(outputfile, format_line, V1, V2, nroots)
+    % Sets eigenvalue extraction method and prints it in the .bdf file.
+    % Inputs:
+    %   - outputfile : .bdf file
+    %   - format_line
+    %   - V1 : lower frequency limit
+    %   - V2 : higher frequency limit
+    %   - nroots : number of modes
+    
     fid = fopen(outputfile, 'a');
     if fid == -1
         error('Could not open the file');
@@ -404,13 +426,20 @@ function set_eigen(outputfile, format_line, V1, V2, nroots)
     fclose(fid);
 end  
 
-function set_flightcond(outputfile, format_line, Mach, Q)
+function set_flightcond(outputfile, format_line, M, Q)
+    % Sets flight conditions
+    % Input:
+    %   - outputfile : .bdf file
+    %   - format_line
+    %   - M : Mach number
+    %   - Q : dynamic pressure
+
     fid = fopen(outputfile, 'a');
     if fid == -1
         error('Could not open the file');
     end
     fprintf(fid, format_line);
-    fprintf(fid, 'PARAM   MACH    %.4f\n', Mach);
+    fprintf(fid, 'PARAM   MACH    %.4f\n', M);
     fprintf(fid, 'PARAM   Q       %.3f', Q);
     fprintf(fid, format_line);
     fprintf(fid, '$               VELOCITY  REFC  RHOREF  SIMXZ\n');
@@ -419,6 +448,11 @@ function set_flightcond(outputfile, format_line, Mach, Q)
 end
 
 function set_flutter(outputfile, format_line)
+    % Sets flutter method and parameters
+    % Input:
+    %   - outputfile : .bdf file
+    %   - format_line
+
     fid = fopen(outputfile, 'a');
     if fid == -1
         error('Could not open the file');
@@ -434,7 +468,9 @@ function set_flutter(outputfile, format_line)
 end
 
 function set_flfacts(outputfile, dens, Mach, Vel, format_line)
-    %
+    % Sets FLFACTS entry
+    % Input:
+    %   - 
     fid = fopen(outputfile, 'a');
     if fid == -1
         error('Could not open the file');
@@ -641,7 +677,92 @@ function matrices(matrixfile)
     fclose(fid);
 end
 
-%% === File dump functions ===
+%% === File comprehension functions ===
+function flutter_extract(filename)
+    fid = fopen(filename, 'r');
+    if fid == -1
+        error('Could not open the file');
+    end
+    
+    nPointTables = 0; % Initialize nPointTables
+    nModes = 0; % Initialize nModes
+    nLines = 0; % Initialize nLines
+    
+    while true
+        tline = fgetl(fid);
+        
+        if ~ischar(tline), break, end;
+        
+        if length(tline) >= 12 && strcmp(tline(8:12), 'POINT')
+            nPointTables = nPointTables + 1;
+            nModes = str2num(tline(18:19));
+        end
+        nLines = nLines + 1;
+    end
+    
+    frewind(fid);
+    iModeBreak = 0;
+    
+    while true
+        tline = fgetl(fid);
+        if ~ischar(tline), break, end;
+        values = strsplit(tline);
+        if length(tline) >= 12 && strcmp(tline(8:12), 'POINT')
+            nPointTables = nPointTables + 1;
+            iMode = str2num(tline(18:19));
+            for j = 1:3
+                fgetl(fid);
+            end
+            tline(1:1) = ' ';
+            if iMode ~= iModeBreak
+                iLine = 0;
+            end
+            while tline(1:1) == ' '
+                tline = fgetl(fid);
+                if strcmp(tline(1:1), '1')
+                    iModeBreak = iMode;
+                    break;
+                end
+                if strcmp(tline(1:4), ' ***') || strcmp(tline(1:3), '***')
+                    break;
+                end
+                iLine = iLine + 1;
+                INVk(iLine, iMode) = str2num(tline(17:28));
+                DENS(iLine, iMode) = str2num(tline(31:41));
+                VELO(iLine, iMode) = str2num(tline(59:69));
+                EAS(iLine, iMode) = VELO(iLine, iMode) * sqrt(DENS(iLine, iMode) / 1.225);
+                DAMP(iLine, iMode) = str2num(tline(72:83));
+                FREQ(iLine, iMode) = str2num(tline(87:97));
+                REVA(iLine, iMode) = str2num(tline(100:111));
+                IMVA(iLine, iMode) = str2num(tline(114:125));
+            end
+        end
+    end
+    
+    fclose(fid);
+    figure('Position', [50 50 650 600]);
+    
+    subplot(2, 1, 1);
+    hold on;
+    for iMode = 1:nModes
+        plot(EAS(:, iMode), -DAMP(:, iMode), '.-');
+    end
+    grid;
+    ylim([-0.10 0.5]);
+    ylabel('Damping [g]');
+    xlabel('Flight Speed [KTAS]');
+    
+    subplot(2, 1, 2);
+    hold on;
+    for iMode = 1:nModes
+        plot(EAS(:, iMode), FREQ(:, iMode), '.-');
+    end
+    ylim([0 30]);
+    ylabel('Frequency [Hz]');
+    grid;
+
+end
+
 
 function nodedump(nodes, format_line, output_file)
     % Dumps nodes into the .bdf file in order, adding the format line to
