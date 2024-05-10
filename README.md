@@ -1,5 +1,5 @@
 # AERONastran
-This code was created to elaborate an assigment for the advanced aeroelasticity course from the Msc in Aeronautical Engineering (UPM). The code is given as it is, and may not work perfectly well in some cases.
+This code was created to elaborate an assigment for the advanced aeroelasticity course from the Msc in Aeronautical Engineering (UPM). The code is provided as is, and may not work perfectly well in some cases.
 
 Features:
   - Creates a semi - wing mesh.
