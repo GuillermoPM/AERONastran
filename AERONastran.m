@@ -7,8 +7,7 @@ close all;
 %% === Files and format ===
 
 % input and output file
-output_file = 'archivo_ordenado.bdf';
-matrices_file  = 'matrix.bdf';
+
 f06_file = 'archivo_ordenado.f06';
 
 % format line for the .bdf
@@ -22,7 +21,7 @@ heading_line = '';
 % set wing span and chord
 span = 2.5;
 chord = 0.5;
-angle = -7;
+angle = 0;
 
 wingspecs = [span, chord, angle];
 
@@ -30,11 +29,11 @@ wingspecs = [span, chord, angle];
 material = struct('E', 7.E10, 'dens', 2750, 'poisson', 0.3);
 
 
-%% === Set analysis parameters ===
-analysis = 1; % select the analyisis type (1 : flutter, 2 : divergence)
-aeroparam = struct('M', 0.0, 'Q', 1500, 'AOA', 0.0174533);
 
-meshdiv = [7, 15];
+%% === Set analysis parameters ===
+analysis = 2; % select the analyisis type (1 : flutter, 2 : divergence, 3 : stiffness and mass matrix)
+flightparam = struct('M', 0.0, 'Q', 1500, 'AOA', 0.0174533);
+meshdiv = [9, 35];
 
 % set panel span and chord division
 panspandiv = linspace(0,1,11);
@@ -46,31 +45,32 @@ vel = round(linspace(50,150,20),2);
 
 flutterparam = [dens;M;vel];
 %% DEBUG
-main(output_file, flutterparam, wingspecs, material, analysis, aeroparam, meshdiv, panspandiv, panchorddiv, format_line)
+main(flutterparam, wingspecs, material, analysis, flightparam, meshdiv, panspandiv, panchorddiv, format_line)
 
 
 %% === Main ===
-function main(output_file, flutterparam, wingspecs, material, analysis, aeroparam, meshdiv, panspandiv, panchorddiv,format_line)
+function main(flutterparam, wingspecs, material, analysis, flightparam, meshdiv, panspandiv, panchorddiv,format_line)
     dens = flutterparam(1,:); M = flutterparam(2,:); vel = flutterparam(3,:);
     if wingspecs(3) == 0
         angleflag = 0;
     else
         angleflag = 1;
     end
-    
+    % FEM model generation
     [X,Y,Z] = FEM(wingspecs, meshdiv(1), meshdiv(2));
     nodes = get_nodes(X, Y, Z);
     meshplot(X,Y,Z, nodes, true);
     shell_elements = gen_shell(nodes);
     
+    % DLM model generation
     [XP, YP, ZP] = dlmpanels(wingspecs, panspandiv, panchorddiv);
     panels = get_panels(XP,YP,ZP);
     [spandiv, ~] = size(X);
-
+    
     switch analysis
         case 1
             disp('Flutter')
-            create_bdf_file(output_file);
+            output_file = create_bdf_file(wingspecs, 'flutter');
             write_flutter_analysis_file(output_file);
 
             nodedump(nodes, format_line, output_file);
@@ -90,7 +90,7 @@ function main(output_file, flutterparam, wingspecs, material, analysis, aeropara
        
         case 2
             disp('Divergence')
-            create_bdf_file(output_file);
+            output_file = create_bdf_file(wingspecs, 'divergence');
             write_solaeroelasticity_section(output_file);
     
             nodedump(nodes, format_line, output_file);
@@ -103,10 +103,16 @@ function main(output_file, flutterparam, wingspecs, material, analysis, aeropara
             paneldivision(output_file, format_line, panchorddiv, panspandiv);
             wingstructcoupling(output_file, nodes, format_line,panels, angleflag);
             set_aeros(output_file, wingspecs, format_line);
-            set_trim(output_file, aeroparam, format_line);
+            set_trim(output_file, flightparam, format_line);
             end_file(output_file);
-        
+        case 3
+            disp('Matrices');
+            matrices_file  = 'matrix.bdf';
+            matrices(matrices_file);
+
     end
+
+    runNastran(output_file);
 
 
 end
@@ -298,7 +304,13 @@ function method(filename, format_line,angleflag, nodes, spandiv, panels)
 end
 
 function wingstructcoupling(file, nodes, format_line, panels, angleflag)
-    % Open the file for appending
+    % Open the file for appending wingstructcoupling.
+    % Input:
+    %   - file
+    %   - nodes : node struct array
+    %   - format_line
+    %   - panels : panel struct array
+    %   - angleflag : flag that activates if wing has angle
     fid = fopen(file, 'a');
     if fid == -1
         error('Could not open the file');
@@ -489,6 +501,10 @@ end
 
 %% === Set FEM properties ===
 function set_material(file, material, format_line)
+    % Sets material entry in the .bdf file
+    % Input:
+    %   - file
+    %   - material : material struct [E, dens, poisson]
     fid = fopen(file, 'a');
     if fid == -1
         error('Could not open the file');
@@ -503,22 +519,27 @@ end
 
 %% === FEM Grid generation ===
 function [X,Y,Z] = FEM(wingspecs, chordnodes,spannodes)
+    % Generates FEM grid and outputs the X,Y,Z coordinates of the nodes
+    % Input:
+    %   - wingspecs : wing specs array [1x3]
+    %   - chordnodes : chord node division
+    %   - spannodes : span node division
+    % Output:
+    %   - [X,Y,Z] : node coordinates mesh
+
+    % get wing specs
     span = wingspecs(1); chord = wingspecs(2); angle = wingspecs(3);
 
-    % Calculate the number of nodes for each section
-
-
-    
-    % Generate nodes for the first section
+    % generate nodes for the first section
     span_nodes1 = linspace(0, span/2, round(spannodes/2));
     chord_nodes = linspace(chord/2, -chord/2, chordnodes);
     
-    % Calculate the slope for the first section
+    % calculate the slope for the first section
     theta1 = deg2rad(angle);
     m1 = tan(theta1);
     
-    % Generate nodes for the second section
-    % Start at the end of the first section
+    % generate nodes for the second section
+    % start at the end of the first section
     span_offset = span_nodes1(end); % Offset for the start of the second section
     span_nodes2 = linspace(0, span/2, round(spannodes/2)) + span_offset; % Include one more node for smooth connection
     span_nodes2(1) = [];
@@ -679,6 +700,7 @@ end
 
 %% === File comprehension functions ===
 function flutter_extract(filename)
+    % Extracts the flutter results from the .f06 file.
     fid = fopen(filename, 'r');
     if fid == -1
         error('Could not open the file');
@@ -940,6 +962,26 @@ function panelplot(X, Y, Z, panels)
     hold off;
 end
 
+%% === Run NASTRAN ===
+function runNastran(input_file)
+    % build nastran path
+    nastran_path = '"C:/Program Files/MSC.Software/NaPa_SE/20231/Nastran/bin/nastranw.exe"';
+    
+    % full input path
+    input_path = fullfile(pwd, input_file);
+    
+    % execute nastran and input bdf file
+    status = system([nastran_path ' input.bdf < ' input_path]);
+    
+    % verify status
+    if status == 0
+        disp('NASTRAN executed.');
+    else
+        disp('EXE error check path.');
+    end
+end
+
+
 %% === Helpers ===
 function write_solaeroelasticity_section(filename)
     content = generate_solaeroelasticity_section();
@@ -1035,24 +1077,31 @@ function content = generate_solaeroelasticity_section()
     content = strcat(content, 'EIGC     10      CLAN                                     2\n');
 end
 
-function create_bdf_file(filename)
-    % Add the .bdf extension to the filename if not already present
-    if ~endsWith(filename, '.bdf')
-        filename = strcat(filename, '.bdf');
+function outputfile = create_bdf_file(wingspecs, analysis)
+    % Extract angle from wingspecs
+    angle = wingspecs(3);
+    
+    % Convert angle to a string
+    if angle >= 0
+        angle_str = num2str(angle);
+    else
+        angle_str = ['neg_', num2str(abs(angle))];
     end
+
+    % Construct the filename
+    filename = ['AERONastran_angle_', angle_str, '_', analysis, '.bdf'];
     
     % Open the file for writing
     fid = fopen(filename, 'w');
     if fid == -1
         error('Cannot open file for writing.');
     end
-        
+    outputfile = filename;
     % Close the file
     fclose(fid);
     
     disp(['File "', filename, '" created successfully.']);
 end
-
 
 function end_file(output_file)
     fid = fopen(output_file, 'a');
