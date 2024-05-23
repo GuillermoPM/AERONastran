@@ -11,5 +11,4 @@ Features:
   - Dump the nodes, pannels and parameters into a .bdf file to be read by Nastran.
   - Generates sol 144 entries.
   - Generates sol 145 entries for PKNL flutter and EIGRL node adquisition.
-  - Generates sol 103 and punch file for stiffness and mass matrices.
   - Executes NASTRAN with the input file automatically.
